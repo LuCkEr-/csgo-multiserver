@@ -158,7 +158,7 @@ start () {
 
 	cat > "$INSTANCE_DIR/msm.d/tmp/server-start.sh"   <<-EOF
 			#! /bin/bash
-			${UNBUFFER:+$UNBUFFER -p} "$INSTANCE_DIR/$SERVER_EXEC" $ARGS | tee "$INSTANCE_DIR/msm.d/log/$TIMESTAMP-server.log"
+			${UNBUFFER:+$UNBUFFER -p} "./$SERVER_EXEC" $ARGS | tee "$INSTANCE_DIR/msm.d/log/$TIMESTAMP-server.log"
 			echo $? > "$INSTANCE_DIR/msm.d/tmp/server.exit-code"
 		EOF
 

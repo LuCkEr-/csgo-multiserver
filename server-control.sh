@@ -26,6 +26,7 @@ update-check () {
 
 start-server () {
 	rm "$TMPDIR/server.exit-code" 2>/dev/null
+	cd "$INSTANCE_DIR"
 	tmux new-window -n "$APPNAME-server" /bin/bash "$TMPDIR/server-start.sh"
 }
 
