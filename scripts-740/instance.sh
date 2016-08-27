@@ -14,6 +14,7 @@ if [[ -e "$INSTALL_DIR/csgo/addons" ]]; then
 cp --reflink=auto -R "$INSTALL_DIR/csgo/cfg" "$INSTANCE_DIR/csgo/cfg"
 cp --reflink=auto -R "$INSTALL_DIR/csgo/models" "$INSTANCE_DIR/csgo/models"
 cp --reflink=auto -R "$INSTALL_DIR/csgo/sound" "$INSTANCE_DIR/csgo/sound"
+cp --reflink=auto -R "$INSTALL_DIR/csgo/materials" "$INSTANCE_DIR/csgo/materials"
 
 # Signal that new files should not be symlinked
 mkdir -p "$INSTANCE_DIR/csgo/addons"
