@@ -25,5 +25,7 @@ mkdir -p "$INSTANCE_DIR/csgo/maps/cfg"
 mkdir -p "$INSTANCE_DIR/csgo/maps/soundcache"
 mkdir -p "$INSTANCE_DIR/csgo/resource/overviews"
 
+# Don't symlink maps
+touch "$INSTANCE_DIR/csgo/maps/.donotlink"
 
 # Other existing files/directories are linked during the next step of the instance creation process
