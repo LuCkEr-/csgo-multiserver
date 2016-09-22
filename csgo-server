@@ -87,7 +87,7 @@ SERVER_EXEC="srcds_run"
 MSM_CFG="msm.$APPNAME.conf"
 
 # UPDATE_WAITTIME: The time to wait for running servers to stop before performing an update (in seconds)
-UPDATE_WAITTIME=120
+UPDATE_WAITTIME=60
 
 
 
@@ -314,21 +314,11 @@ update () {
 
 	# Perform the actual update within a tmux environment, so closing the terminal or
 	# an interruption of an SSH session does not interrupt the update
-	if ! [[ $TMUX && $PERFORM_UPDATE ]]; then
-		echo "Switching into TMUX for performing the update ..."
-
-		TMPDIR="$INSTALL_DIR/msm.d/tmp"
-		mkdir -p "$TMPDIR"
-		local SOCKET="$TMPDIR/update.tmux-socket"
-
-		if ( tmux -S "$SOCKET" has-session > /dev/null 2>&1 ); then 
-			tmux -S "$SOCKET" attach
-			echo; return 0; fi
-
-		delete-tmux
+	if ! [[ $PERFORM_UPDATE ]]; then
+		echo "Performing the update ..."
 
 		export PERFORM_UPDATE=1
-		tmux -S "$SOCKET" -f "$THIS_DIR/tmux.conf" new-session "$THIS_SCRIPT" "$ACTION"
+		"$THIS_SCRIPT" "$ACTION"
 		local errno=$?
 		unset PERFORM_UPDATE
 
