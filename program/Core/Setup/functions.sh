@@ -8,11 +8,155 @@
 
 
 
-##################################### SETUP #####################################
+Core.Setup::registerCommands () {
+	simpleCommand "Core.Setup::beginSetup" setup
+	simpleCommand "Core.Setup::printConfig" print-config
+}
 
-setup () {
-	# First-time setup
+
+
+
+################################ CONFIG HANDLING ################################
+
+requireConfig () {
+	Core.Setup::validateConfig || error <<-EOF
+		No valid configuration found!
+
+		Create a new configuration using **$THIS_COMMAND setup**.
+	EOF
+}
+
+
+requireAdmin () {
+	requireConfig || return
+	[[ $USER == $ADMIN ]] || error <<-EOF
+		The user **$ADMIN** controls the base installation exclusively
+		and is the only one who can perform actions on it!
+	EOF
+}
+
+
+Core.Setup::loadConfig () {
+	.conf "cfg/app-$APP.conf" && Core.Setup::validateConfig
+}
+
+
+# load msm configuration file of the given user
+Core.Setup::loadConfigOf () {
+	USER_DIR="$(eval echo ~$1)/msm.d" Core.Setup::loadConfig
+}
+
+
+# Check the current configuration variables for correctness and plausibility
+Core.Setup::validateConfig () {
+	# Require admin variable
+	[[ $ADMIN ]] || error <<< "variable \$ADMIN is not defined!" || return
+
+	# Check base installation directory
+	[[ $INSTALL_DIR                       ]] || error <<-EOF || return
+			variable \$INSTALL_DIR is not defined!
+		EOF
+
+	[[ -r $INSTALL_DIR && -x $INSTALL_DIR ]] || error <<-EOF || return
+			The base installation directory **$INSTALL_DIR**
+			is not accessible!
+		EOF
+
+	INSTANCE_DIR="$INSTALL_DIR" Core.Instance::isBaseInstallation \
+											 || error <<-EOF || return
+			The directory **$INSTALL_DIR** is not a
+			valid base installation for $APP!
+		EOF
+}
+
+
+Core.Setup::writeConfig () {
+	CFG="$USER_DIR/cfg/app-$APP.conf"
+	if Core.Setup::validateConfig; then
+		Core.Setup::printConfig > "$CFG" || fatal <<-EOF
+				Error writing the configuration to **$CFG**!
+				You may lack the necessary permissions to access the file!
+			EOF
+	else
+		error <<< "Invalid configuration!"
+	fi
+}
+
+
+Core.Setup::printConfig () {
 	cat <<-EOF
+		#! /bin/bash
+		# This is a configuration file for CS:GO Multi Server Manager
+		ADMIN=$ADMIN
+		INSTALL_DIR="$INSTALL_DIR"
+		DEFAULT_INSTANCE="$DEFAULT_INSTANCE"
+	EOF
+
+	App::printAdditionalConfig
+}
+
+
+
+
+################################# SETUP HELPERS #################################
+
+Core.Setup::importFrom () {
+	local IMPORT_FROM=$1
+	out <<< ""
+	out <<< "Trying to import the configuration of user **$IMPORT_FROM** ..."
+
+	# Check if user exists and has a configuration
+
+	local ADMIN_HOME="$(eval echo ~$IMPORT_FROM)"
+	[[ -r $ADMIN_HOME ]] || error <<-EOF || return
+			User **$IMPORT_FROM** does not exist or their home
+			directory is not readable!
+		EOF
+
+	[[ -r $ADMIN_HOME/msm.d/cfg/app-$APP.conf ]] || {
+		warning <<-EOF
+			User **$IMPORT_FROM** has no configuration that we can import settings
+			from. You may, though, switch users and create a configuration on
+			that user's account.
+
+			You will have to confirm switching users with your sudo password. (CTRL-C to cancel)
+
+		EOF
+
+		sudo -iu $IMPORT_FROM \
+			MSM_LOGFILE="$MSM_LOGFILE" MSM_DEBUG=$MSM_DEBUG ADMIN=$ADMIN \
+			"$THIS_COMMAND" setup ||
+		{
+			out <<< "Cancelled the import from user $IMPORT_FROM ..."
+			return 1
+		}
+	}
+
+	# Import their configuration
+	Core.Setup::loadConfigOf $IMPORT_FROM || error <<-EOF || return
+			The configuration of user $IMPORT_FROM contains errors!
+		EOF
+
+	if [[ $ADMIN != $IMPORT_FROM ]]; then
+		info <<-EOF
+			The configuration of user $IMPORT_FROM refers to user $ADMIN.
+			We will now try to import that user's configuration instead ...
+		EOF
+		Core.Setup::importFrom $ADMIN;
+		return
+	fi
+
+	Core.Setup::writeConfig
+}
+
+
+
+
+################################# INITIAL SETUP #################################
+
+Core.Setup::beginSetup () {
+	out <<-EOF
+
 		-------------------------------------------------------------------------------
 		                CS:GO Multi-Mode Server Manager - Initial Setup
 		-------------------------------------------------------------------------------
@@ -20,327 +164,147 @@ setup () {
 		It seems like this is the first time you use this script on this machine.
 		Before advancing, be aware of a few things:
 
-		>>  A configuration file will be created in the location:
-		        $(bold "$CFG")
+		>>  The configuration files will be saved in the directory:
+		        **$USER_DIR/cfg**
 
-		    If you want to use a different location, exit and edit
-		    the \$MSM_CFG variable within this file accordingly.
+		    Make sure to backup any important data in that location.
 
 		>>  For multi-user setups, this script, located at
-		        $(bold "$THIS_SCRIPT")
+		        **$THIS_SCRIPT**
 		    must be readable for all users.
+	EOF
 
+	promptY || return
+
+	# Create config directory
+	local CFG_DIR="$USER_DIR/cfg"
+	local CFG="$CFG_DIR/app-$APP.conf"
+	mkdir -p "$CFG_DIR" && [[ -w "$CFG_DIR" ]] || {
+		fatal <<< "No permission to create or write the directory **$CFG_DIR**!"
+		return
+	}
+
+	# Check, if config is writable
+	[[ ! -e "$CFG" || -w "$CFG" ]] || {
+		fatal <<< "No permission to write the configuration file **$CFG**!"
+		return
+	}
+
+	# Ask the user if they wish to import a configuration
+	if [[ ! $ADMIN ]]; then
+		log <<-EOF
+
+			Importing configurations
+			========================
 		EOF
-	if ! promptY; then echo; return 1; fi
+		fmt -w67 <<-EOF | indent
 
-	# Query steam installation admin user
-	cat <<-EOF
+			Instead of creating a new configuration, you may also import the settings
+			from a different user on this system.  This allows you to use that user's
+			game server installation as a base for your own instances, without having
+			to download the server files again.
 
-		Please choose the user that is responsible for the game installation and
-		updates on this machine. As long as the access rights are correctly set,
-		this server will use the game data provided by that user, which makes
-		re-downloading the game for multiple users unnecessary.
-
+			If you wish to import the settings from another user, enter their name below.
+			Otherwise, hit enter to create your own configuration.
 		EOF
+	fi
 
-	while [[ ! $ADMIN_HOME ]]; do
-		read -p "Admin's username (default: $USER) " -r ADMIN
-		
-		if [[ ! $ADMIN ]]; then ADMIN=$USER; fi
-		if [[ ! $(getent passwd $ADMIN) ]]; then
-			caterr <<< "$(bold ERROR:) User $(bold $ADMIN) does not exist! Please specify a different admin."
+	local SUCCESS=
+	until [[ $SUCCESS ]]; do
+		if [[ ! $ADMIN ]]; then
 			echo
-			continue
+			echo "Please enter the user to import the configuration from.  Leave empty"
+			echo "to skip importing configurations, press CTRL-C to exit."
+			echo
+			read -p "> Import configuration from? " -r ADMIN
+
+			if [[ $ADMIN ]]; then
+				debug <<< "Selected to import from user **$ADMIN**."
+			else
+				ADMIN=$USER
+				debug <<< "Skipping import and starting admin setup."
 			fi
-
-		ADMIN_HOME=$(eval echo "~$ADMIN")
-		if [[ ! -r $ADMIN_HOME ]]; then
-			caterr <<-EOF
-				$(bold ERROR:) That user's home directory $(bold "$ADMIN_HOME")
-				       is not readable! Please specify a different admin.
-
-				EOF
-			unset ADMIN_HOME; fi
-		
-		done
-
-	echo
-	# Check if the admin has a working configuration already
-	if [[ $USER != $ADMIN ]]; then
-
-		# If client installation fails (for instance, if the admin has no configuration himself)
-		# try switching to the admin and performing the admin installation there
-		if ! client-install; then
-			catwarn <<-EOF
-				$(bold WARN:)  Additional installation steps are required on the account of $(bold $ADMIN)!
-				       Please log in to the account of $(bold $ADMIN) now!
-				EOF
-
-			sudo -i -u $ADMIN "$THIS_SCRIPT" admin-install
-
-			if (( $? )); then caterr <<-EOF
-					$(bold ERROR:) Admin Installation for $(bold $ADMIN) failed!
-
-					EOF
-				return 1; fi
-
-			# Try client installation again!
-			if ! client-install; then caterr <<-EOF
-					$(bold ERROR:) Client Installation failed!
-
-					EOF
-				return 1; fi
-
-			fi
-
-	else
-		admin-install
 		fi
+
+		[[ $ADMIN == $USER ]] && { Core.Setup::setupAsAdmin; return; }
+
+		if Core.Setup::importFrom $ADMIN; then
+			success <<< "The configuration of user **$ADMIN** has been imported successfully!"
+			local SUCCESS=1
+		else
+			warning <<< "Import failed! Please specify a different user."
+			ADMIN=
+		fi
+	done
+
+	# Succeeds, if we have a valid config at the end
+	Core.Setup::loadConfig
 }
 
-client-install () {
-	echo "Trying to import settings from $(bold $ADMIN) ..."
 
-	ADMIN_HOME=$(eval echo "~$ADMIN")
-	if [[ ! -r $ADMIN_HOME ]]; then caterr <<-EOF
-			$(bold ERROR:) The admin's home directory $(bold "$ADMIN_HOME") is not readable.
 
-			EOF
-		return 1; fi
 
-	ADMIN_CFG="$(cfgfile $ADMIN_HOME)"
-	readcfg "$ADMIN_CFG"
-	if (( $? )); then echo; return 1; fi
-	writecfg
-	return 0
-}
+############################### ADMIN INSTALLATION ##############################
 
-admin-install () {
-	cat <<-EOF
-		-------------------------------------------------------------------------------
-		                  CS:GO Multi Server Manager - Admin Install
-		-------------------------------------------------------------------------------
+# TODO: make this function smaller
+Core.Setup::setupAsAdmin () {
 
-		Checking for an existing configuration ...
-		EOF
-	if readcfg 2> /dev/null; then
-		if [[ $ADMIN == $USER ]]; then catwarn <<-EOF
-				$(bold WARN:)  A valid admin configuration already exists for this user $(bold $ADMIN).
-				       If you continue, the installation steps will be executed again.
+	log <<-EOF
 
-				EOF
-		else catwarn <<-EOF
-				$(bold WARN:)  This user is currently configured as client of user $(bold $ADMIN).
-				       If you continue, this user will create an own game installation instead.
+		Basic Setup
+		===========
 
-				EOF
-			fi
-		promptN || { echo; return 1; }
-		fi
+		This assistant will install all remaining dependencies for your
+		$APP server and create a basic configuration.  Please follow the
+		instructions below.
+	EOF
 
-	if [[ ! $APPNAME || ! $APPID ]]; then caterr <<-EOF
-		$(bold ERROR:) APPNAME and APPID are not set! Check this script and your
-		       configuration file and try again!
-		EOF
-		return 1; fi
+	######### Install App Downloader/Updater
 
-	echo
-	ADMIN=$USER
-	ADMIN_HOME=~
-	echo "You started the admin Installation for user $(bold $ADMIN)"
-	echo "This will create a configuration file in the location:"
-	echo "        $(bold "$CFG")"
-	echo
-	promptY || { echo; return 1; }
-	echo
+	App::installUpdater || return
 
-	############ STEAMCMD ############
-	# Check for an existing SteamCMD
-	if [[ -x $ADMIN_HOME/Steam/steamcmd/steamcmd.sh ]]; then
-		STEAMCMD_DIR="$ADMIN_HOME/Steam/steamcmd"
-		catinfo <<< "$(bold INFO:)  An existing SteamCMD was found in $(bold "$STEAMCMD_DIR")."
-	else
-		# Ask for the SteamCMD directory
-		cat <<-EOF
-			SteamCMD is required to install the game server and its updates. Please
-			specify the directory (absolute or relative to your home directory)
-			for SteamCMD to be installed in.
+	######### Create base installation
 
-			EOF
+	INSTANCE=
+	INSTALL_DIR="$HOME/$APP-base"
+	until Core.BaseInstallation::isExisting; do
+		bold <<-EOF
 
-		unset SUCCESS
-		until [[ $SUCCESS ]]; do
-			read -r -p "SteamCMD install directory (default: Steam/steamcmd) " STEAMCMD_DIR
+			Now, please select the **base installation directory**.  This is the
+			directory the server will be downloaded to, make sure that there is
+			plenty of free space on the disk.  Be aware that this directory will
+			be made **public readable**, so other users on the system can create
+			server instances based on it.
 
-			if [[ ! $STEAMCMD_DIR ]]; then
-				STEAMCMD_DIR=Steam/steamcmd;
-				fi
-			if [[ ! $STEAMCMD_DIR =~ ^/ ]]; then
-				STEAMCMD_DIR="$ADMIN_HOME/$STEAMCMD_DIR"
-				fi
-
-			# If steamcmd exists in the specified directory, nothing more to do
-			if [[ -x $STEAMCMD_DIR/steamcmd.sh ]]; then break; fi
-			if [[ $(ls -A "$STEAMCMD_DIR" 2>/dev/null) ]]; then catwarn <<-EOF
-					$(bold WARN:)  The specified directory $(bold "$STEAMCMD_DIR")
-					       is non-empty. Please backup any important data before proceeding
-					       or choose another directory!
-					EOF
-				promptN "Use this directory for the SteamCMD installation?" && SUCCESS=1
-			else SUCCESS=1; fi
-
-			done
-		fi
-
-	# Download and install SteamCMD, only if SteamCMD does not already exist in the target directory.
-	if [[ ! -x $STEAMCMD_DIR/steamcmd.sh ]]; then
-		WDIR=$(pwd)
-		mkdir -p "$STEAMCMD_DIR"
-		cd "$STEAMCMD_DIR"
-		echo "Installing SteamCMD to $(bold "$STEAMCMD_DIR") ..."
-
-		unset SUCCESS
-		until [[ $SUCCESS ]]; do
-			wget https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz
-			if (( $? )); then
-				caterr <<< "$(bold ERROR:) SteamCMD Download failed."
-				if ! promptY "Retry?"; then echo; return 1; fi
-			else
-				local SUCCESS=1
-				fi
-			done
-
-		echo
-		echo "Extracting ..."
-		tar xzvf steamcmd_linux.tar.gz
-		rm steamcmd_linux.tar.gz &> /dev/null
-		if [[ ! -x $STEAMCMD_DIR/steamcmd.sh ]]; then
-			caterr <<< "$(bold ERROR:) SteamCMD installation failed."
-			echo
-			return 1; fi
-
-		echo
-		echo "Updating SteamCMD ..."
-		echo "quit" | "$STEAMCMD_DIR/steamcmd.sh"
-		echo
-		echo
-		echo "SteamCMD installed successfully."
-		cd "$WDIR"
-		fi
-
-	############ GAME INSTALL DIRECTORY ############
-	# check for an existing game installation
-	if	[[		$(cat "$ADMIN_HOME/$APPNAME/msm.d/appid" 2> /dev/null) == $APPID	\
-			&&	-e "$ADMIN_HOME/$APPNAME/msm.d/is-admin"							]]; then
-		INSTALL_DIR="$ADMIN_HOME/$APPNAME"
-		catinfo <<< "$(bold INFO:)  A previous game installation was found in $(bold "$INSTALL_DIR")."
-	else
-		echo
-		cat <<-EOF
-			Now, please select the base installation directory. This is the directory the
-			server will be downloaded to, make sure that there is plenty of free space on
-			the disk. Be aware that this directory will be made public readable, so other
-			users on the system can create server instances based on it.
-			EOF
-
-		unset SUCCESS
-		until [[ $SUCCESS ]]; do
-			echo
-			read -r -p "Game Server Installation Directory (default: $APPNAME) " INSTALL_DIR
-
-			if [[ ! $INSTALL_DIR ]]; then 
-				INSTALL_DIR="$APPNAME" 
-				fi
-			if [[ ! $INSTALL_DIR =~ ^/ ]]; then
-				INSTALL_DIR="$ADMIN_HOME/$INSTALL_DIR"
-				fi
-
-			INSTANCE_DIR="$INSTALL_DIR" check-instance-dir
-
-			errno=$?
-			if (( $errno == 1 )); then
-				catwarn <<-EOF
-					       This operation may $(bold "DELETE EXISTING DATA") in $(bold "$INSTALL_DIR") ...
-
-					EOF
-				sleep 2
-				promptN && SUCCESS=1
-			elif (( $errno )); then
-				caterr <<-EOF
-					$(bold ERROR:) $(bold "$INSTALL_DIR") cannot be used as a base
-					       installation directory!
-					EOF
-			else
-				SUCCESS=1
-				fi
-			if [[ ! $SUCCESS ]]; then
-				echo "Please specify a different directory."
-				fi
-		done
-		mkdir -p "$INSTALL_DIR"
-		fi
-
-	echo
-	echo "Preparing installation directories ..."
-
-	INSTANCE_DIR="$INSTALL_DIR"
-
-	# Create SteamCMD Scripts
-	cat > "$STEAMCMD_DIR/update" <<-EOF
-		login anonymous
-		force_install_dir "$INSTALL_DIR" 
-		app_update $APPID
-		quit
 		EOF
 
-	cat > "$STEAMCMD_DIR/validate" <<-EOF
-		login anonymous
-		force_install_dir "$INSTALL_DIR" 
-		app_update $APPID validate
-		quit
-		EOF
+		read -r -p "Game Server Installation Directory (default: ~/$APP-base) " INSTALL_DIR
 
-	cat > "$STEAMCMD_DIR/update-check" <<-EOF
-		login anonymous
-		app_info_update 1
-		app_info_print 740
-		quit
-		EOF
+		INSTALL_DIR=${INSTALL_DIR:-"$HOME/$APP-base"}
+		INSTALL_DIR="$(eval echo "$INSTALL_DIR")"   # expand tilde and stuff
+		INSTALL_DIR="$(readlink -m "$INSTALL_DIR")" # get absolute directory
 
-	############ PREPARE MSM DIRECTORY ############
+		Core.BaseInstallation::create
+	done
 
-	# Create settings directory within INSTALL_DIR
-	mkdir -p "$INSTALL_DIR/msm.d"
-
-	echo "$APPID"   > "$INSTALL_DIR/msm.d/appid"
-	echo "$APPNAME" > "$INSTALL_DIR/msm.d/appname"
-	# Copy scripts, but do not overwrite existing files/modifications
-	cp -n "$SUBSCRIPT_DIR/server.conf" "$INSTALL_DIR/msm.d/server.conf"
-	cp -n -R "$THIS_DIR/modes-$APPID" "$INSTALL_DIR/msm.d/modes"
-	cp -n -R "$THIS_DIR/addons-$APPID" "$INSTALL_DIR/msm.d/addons"
-
-
-	touch "$INSTALL_DIR/msm.d/is-admin"
-
-	fix-permissions
+	# Final Steps
+	App::finalizeInstance
+	Core.BaseInstallation::applyPermissions
 
 	# Create Config and make it readable
-	writecfg
-	chmod a+r "$CFG"
+	chmod o+rx "$USER_DIR" "$CFG_DIR"
+	Core.Setup::writeConfig && {
+		log <<< ""
+		success <<-EOF
+			Basic Setup Complete!
 
-	cat <<-EOF
-		Basic Setup Complete!
+			Execute **$THIS_COMMAND install** to install or update the actual game files.
+			Of course, you can also copy the files from a different location.
 
-		Do you want to install/update the game right now? If you choose No, you can
-		install the game later using '$THIS_COMM install' or copy the files manually.
-
+			Use **$THIS_COMMAND @name create** to create a new server instance out of
+			your base installation.  Each instance can be configured independently and
+			multiple instances can run simultaneously.
 		EOF
-
-	if promptY "Install Now?"; then
-		echo
-		update
-		return 0; fi
-
-	echo
-	return 0
+	}
+	chmod o+rX "$CFG"
 }

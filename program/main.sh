@@ -7,24 +7,46 @@
 
 
 
-######################### INITIAL CHECKS AND CALCULATIONS ########################
 
-echo # Make some space
+main () {
 
+: Utils # Enable output functions and logging
 
-# Check required packages
-if [[ ! -x $(which awk)  ]]; then caterr <<< "$(bold ERROR:) 'awk' is not installed, but required for this script!" ; echo; return 1; fi
-if [[ ! -x $(which tmux) ]]; then caterr <<< "$(bold ERROR:) 'tmux' is not installed, but required for this script!"; echo; return 1; fi
-if [[ ! -x $(which wget) ]]; then caterr <<< "$(bold ERROR:) 'wget' is not installed, but required for this script!"; echo; return 1; fi
-if [[ ! -x $(which tar)  ]]; then caterr <<< "$(bold ERROR:) 'tar' is not installed, but required for this script!" ; echo; return 1; fi
+out <<-EOF >&3
 
 
 
+	========================================================================
+
+	                     **CS:GO Multi Server Manager**
+	                     ------------------------------
+
+	  Current time:   $(date)
+	  Log file:       $MSM_LOGFILE
+	  Commands:       $@
+
+	========================================================================
+
+EOF
 
 
-################################### LOAD MODULES #################################
 
-: Utils
+
+############################### CHECK DEPENDENCIES ###############################
+
+# Check required programs
+local programs="sed awk tmux wget tar unbuffer readlink inotifywait"
+local program
+for program in $programs; do
+	[[ -x $(which $program) ]] ||
+		fatal <<< "The program **$program** could not be found on your system!" || return
+done
+
+
+
+
+################################## LOAD MODULES ##################################
+
 : AddonEngine
 
 ::init
@@ -33,8 +55,7 @@ if [[ ! -x $(which tar)  ]]; then caterr <<< "$(bold ERROR:) 'tar' is not instal
 ::add Core.Setup
 ::add Core.BaseInstallation
 ::add Core.Instance
-::add Core.ServerControl
-::add Core.Wrapper
+::add Core.Server
 
 ::loadApp
 ::update
@@ -42,17 +63,27 @@ if [[ ! -x $(which tar)  ]]; then caterr <<< "$(bold ERROR:) 'tar' is not instal
 
 
 
-############################# LOAD CONFIGURATION FILE ############################
+# TODO: add config and instance checks to all functions that require
+#       them - arguments such as help should work independently
 
-NO_COMMAND=1
-readcfg 2> /dev/null && set-instance "$DEFAULT_INSTANCE" || NEED_SETUP=1
+if ! (( $# )); then
+	Core.CommandLine::usage
+	echo
+	return
+fi
 
 
-Core.CommandLine::parseArguments $@
 
 
-if [[ $NEED_SETUP ]]; then unset NEED_SETUP NO_COMMAND; setup; return $?; fi
+# Use $DEFAULT_INSTANCE variable from configuration file
+# if unset, the default instance is the base installation
 
-if [[ $NO_COMMAND ]]; then unset NO_COMMAND; usage; return 1; fi
+Core.Setup::loadConfig
+INSTANCE="$DEFAULT_INSTANCE" Core.CommandLine::parseArguments "$@"
 
-return 0
+local errno=$?
+# Insert space before ending the program (if it is not a remote command)
+[[ $MSM_REMOTE ]] || echo
+return $?
+
+} # end function main

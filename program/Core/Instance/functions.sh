@@ -8,115 +8,250 @@
 
 
 
+Core.Instance::registerCommands () {
+	simpleCommand "Core.Instance::create" create create-instance
+	simpleCommand "Core.Instance::setDefault" set-default
+	simpleCommand "Core.Instance::listInstances" list-instances
+	oneArgCommand "Core.Instance::importFrom" import-from
+}
+
+
+
+
+################################ INSTANCE HELPERS ################################
+
+requireRunnableInstance () {
+	requireConfig || return
+	Core.Instance::isRunnableInstance || error <<-EOF
+		Cannot access or run **$INSTANCE_TEXT**!
+
+		Make sure that a) the server is properly installed and b) that
+		you have the necessary privileges for that instance's directory.
+	EOF
+}
+
+
+# true, if an instance exists in directory $INSTANCE_DIR
+Core.Instance::isInstance () [[
+	$(cat "$INSTANCE_DIR/msm.d/app" 2>/dev/null) == $APP
+]]
+
+
+Core.Instance::isRunnableInstance () {
+	Core.Instance::isInstance && [[ -w "$INSTANCE_DIR" ]] && App::isRunnableInstance
+}
+
+
+# true, if $INSTANCE_DIR is a base installation
+Core.Instance::isBaseInstallation () {
+	Core.Instance::isInstance && [[ -e $INSTANCE_DIR/msm.d/is-admin ]]
+}
+
+
+# true, if $INSTANCE_DIR can be used as directory for a new instance
+Core.Instance::isValidDir () {
+	[[ ! -e $INSTANCE_DIR ]] || [[ -d $INSTANCE_DIR && ! $(ls -A "$INSTANCE_DIR") ]]
+}
+
+
+# update instance-related variables
+Core.Instance::select () {
+	if [[ $INSTANCE ]]; then
+		INSTANCE_DIR="$HOME/$APP@$INSTANCE"
+		INSTANCE_TEXT="Instance @$INSTANCE"
+	else
+		INSTANCE_DIR="$INSTALL_DIR"
+		INSTANCE_TEXT="Base Installation"
+	fi
+	# Other locations
+	TMPDIR="$INSTANCE_DIR/msm.d/tmp"
+	LOGDIR="$INSTANCE_DIR/msm.d/log"
+	SOCKET="$TMPDIR/server.tmux-socket"
+}
+
+
+Core.Instance::listInstances () (
+	for file in ~/*; do
+		if [[ $file =~ ~/$APP@ ]]; then
+			INSTANCE="${file#~/$APP@}"
+			Core.Instance::select
+			Core.Instance::isInstance && echo "$INSTANCE"
+		fi
+	done
+)
+
+
+
+
 ###################### SERVER INSTANCE MANAGEMENT FUNCTIONS ######################
 
 # recursively symlinks all files from the base installation that do not exist yet in the instance
-symlink-all-files () {
-	# Return if .donotlink file exists in target.
-	# This file could be made by instance creation scripts, to indicate that new or missing files should not be linked from the base instance again
-	if [[ -e $INSTANCE_DIR/$1.donotlink ]]; then return 0; fi
+# TODO: instead of checking for a donotlink file, respect App::instanceIgnoredDirs
+Core.Instance::symlinkFiles () {
+	local IGNORE=" $(App::instanceIgnoredFiles) msm.d "
+	local pwd="$(pwd)/"
+	local dir="${pwd#"$INSTANCE_DIR/"}"
+	local BASE_DIR="$INSTALL_DIR/$dir"
+	debug <<< "Processing directory **$dir**"
 
 	# Loop through files in directory
-	for file in $(ls -A "$INSTALL_DIR/$1"); do
+	for file in $(ls -A "$BASE_DIR"); do
 		# Skip files that are not readable for the current user
-		if [[ ! -r $INSTALL_DIR/$1$file ]]; then continue ; fi
+		[[ ! -r $BASE_DIR$file ]] && continue
 
-		# MSM directory or already symlinked files do not need any more work
-		if [[ -L $INSTANCE_DIR/$1$file || $file == msm.d ]]; then continue ; fi
+		# Skip ignored files
+		[[ $IGNORE =~ " $dir$file " ]] && log <<-EOF >&3 && continue
+			  --- IGNORED $dir$file.
+		EOF
+
+		# Skip existing symlinks
+		[[ -L $file ]] && continue
 
 		# recurse through subdirectories
-		if [[ -d $INSTANCE_DIR/$1$file ]]; then symlink-all-files "${1}${file}/"; continue ; fi
+		[[ -d $file ]] && {
+			( cd $file; Core.Instance::symlinkFiles; )
+			continue
+		}
 
 		# Create symlink for files that do not exist yet in the target directory
-		if [[ ! -e $INSTANCE_DIR/$1$file ]]; then 
-			ln -s "$INSTALL_DIR/$1$file" "$INSTANCE_DIR/$1$file"
-			continue ; fi
+		[[ ! -e $file ]] &&	ln -s "$BASE_DIR$file" "$file" && log <<-EOF >&3
+			  + SYMLINKED $dir$file.
+		EOF
 
-		done
+	done
+	out <<< "" >&3
 }
 
-create-instance () {
-	cat <<-EOF
-		-------------------------------------------------------------------------------
-		               CS:GO Multi-Mode Server Manager - Instance Setup
-		-------------------------------------------------------------------------------
+
+Core.Instance::copyFiles () {
+	local file
+	for file in $(App::instanceCopiedFiles); do
+		local dir="$(dirname "$file")"
+		[[ $dir ]] && mkdir -p "$dir"
+		[[ -e $INSTALL_DIR/$file ]] && cp -R "$INSTALL_DIR/$file" "$file"
+	done
+}
+
+
+Core.Instance::makeDirectories () {
+	local dir
+	# Create mixed directories
+	for dir in $(App::instanceMixedDirs); do
+		mkdir -p "$dir"
+	done
+	# Create base for ignored dirs
+	for dir in $(App::instanceIgnoredFiles); do
+		local dir="$(basename "$dir")"
+		[[ $dir ]] && mkdir -p "$dir"
+	done
+}
+
+
+Core.Instance::create () (
+
+	log <<< ""
+	requireConfig || return
+
+	Core.Instance::isBaseInstallation && warning <<-EOF && return
+			Directory **$INSTANCE_DIR** contains a base installation.
+			Create a new instance using **$THIS_COMMAND @name create**.
 		EOF
 
-	if [[ ! $INSTANCE ]]; then catinfo <<-EOF
-		$(bold INFO:)  You have selected a base installation, There is no need to create an
-		       instance here. If you want to create a new instance, set the instance
-		       name using '$THIS_COMM @name create'.
-
+	Core.Instance::isInstance && info <<-EOF && return
+			Directory **$INSTANCE_DIR** already contains a valid instance.
 		EOF
-		return 0; fi
 
-	check-instance-dir
-	local errno=$?
-	if (( $errno == 1 )); then
-		catwarn <<-EOF
-			       This operation $(bold "WILL DELETE ALL DATA") in $(bold "$INSTANCE_DIR") ...
+	if ! Core.Instance::isValidDir; then
+		warning <<-EOF
+			The directory **$INSTANCE_DIR** is non-empty, creating an
+			instance here may cause **LOSS OF DATA**!
 
-			EOF
+			Please backup all important files before proceeding!
+		EOF
 		sleep 2
-		promptN || { echo; return 1; }
-	elif (( $errno )); then
-		return 1; fi
+		promptN || return
+	fi
 
 	############ INSTANCE CREATION STARTS NOW ############
-	rm -rf "$INSTANCE_DIR" > /dev/null 2>&1
+	info <<< "Creating an instance in directory **$INSTANCE_DIR** ..."
 
-	mkdir -p "$INSTANCE_DIR/msm.d"
+	mkdir -p "$INSTANCE_DIR" && [[ -w "$INSTANCE_DIR" ]] || {
+		fatal <<< "No permission to create or write the directory **$INSTANCE_DIR**!"
+		return
+	}
 
-	# Execute Instance creation script. This will copy all files that the
-	# instance owner should be able to modify himself.
-	echo
-	echo "Copying instance-specific files ..."
+	cd "$INSTANCE_DIR"
+	rm -rf msm.d 2>/dev/null
+	mkdir msm.d
 
-	source "$SUBSCRIPT_DIR/instance.sh"
+	log <<< ""
+	log <<< "Copying instance-specific files ..."
+	Core.Instance::copyFiles
 
-	if (( $? )); then
-		caterr <<-EOF
-			$(bold ERROR:) An error occured while executing the instance creation script!
+	log <<< "Creating additional directories ..."
+	Core.Instance::makeDirectories
 
-			EOF
-		rm -rf "$INSTANCE_DIR" > /dev/null 2>&1
-		return 1; fi
+	log <<< "Linking remaining files to base installation ..."
+	Core.Instance::symlinkFiles
 
-	echo
-	echo "Linking remaining files to the base installation ..."
 
-	echo "$INSTALL_DIR" > "$INSTANCE_DIR/msm.d/install-dir"
+	log <<< "Finishing instance creation ..."
 
-	if ! symlink-all-files; then
-		caterr <<-EOF
-			$(bold ERROR:) Linking this instance to the base installation failed.
+	App::finalizeInstance
+	App::applyInstancePermissions
 
-			EOF
-		rm -rf "$INSTANCE_DIR" > /dev/null 2>&1
-		return 1; fi
+	mkdir -m o-rwx "$TMPDIR" "$LOGDIR"
+	echo $APP > "msm.d/app"
 
-	echo
-	echo "Performing final steps ..."
+	success <<-EOF
+		Instance created successfully! Use **$THIS_COMMAND
+		@$INSTANCE set-default** to make this your default
+		instance.
 
-	cp "$INSTALL_DIR/msm.d/appid" "$INSTANCE_DIR/msm.d/appid"
-	cp "$INSTALL_DIR/msm.d/appname" "$INSTANCE_DIR/msm.d/appname"
-	cp "$SUBSCRIPT_DIR/server.conf" "$INSTANCE_DIR/msm.d/server.conf"
+		Now, edit your instance's configuration file, located
+		in **$INSTANCE_DIR/msm.d/server.conf**, to set IP, port,
+		passwords and other game settings of your instance.
+	EOF
+)
 
-	# Copy gamemodes and addons from the base installation
-	cp -R "$INSTALL_DIR/msm.d/modes" "$INSTANCE_DIR/msm.d/modes"
-	cp -R "$INSTALL_DIR/msm.d/addons" "$INSTANCE_DIR/msm.d/addons"
 
-	fix-permissions
-
-	cat <<-EOF
-
-		Instance created successfully in $(bold "$INSTANCE_DIR")!
-
-		EOF
-	catinfo <<-EOF
-		$(bold INFO:)  You should now edit your instance's configuration, located in
-		            $(bold "$INSTANCE_DIR/msm.d/server.conf")
-		       in order to set IP, port, passwords and other game settings.
-
-		EOF
+Core.Instance::setDefault () {
+	log <<< ""
+	DEFAULT_INSTANCE="$INSTANCE"
+	Core.Setup::writeConfig && {
+		success <<< "Your default instance now is: **$INSTANCE_TEXT**"
+	}
 }
+
+
+Core.Instance::importFrom () (
+	[[ $1 ]] || return
+	log <<< ""
+	log <<< "Trying to import instances from $1 ..."
+	i=0
+
+	INSTANCES="$(
+		ssh "$1" \
+			MSM_REMOTE=1 APP=$APP \
+			"$THIS_COMMAND" list-instances
+	)"
+
+	[[ $INSTANCES ]] || error <<-EOF || return
+		Host **$1** has no instances to import!
+	EOF
+
+	for INSTANCE in $INSTANCES; do
+		Core.Instance::select
+		if Core.Instance::isValidDir; then
+			(( i++ ))
+			mkdir -p "$INSTANCE_DIR/msm.d"
+			echo $APP > "$INSTANCE_DIR/msm.d/app"
+			echo "$1" > "$INSTANCE_DIR/msm.d/host"
+			out <<< "    Imported **$INSTANCE_TEXT** ..."
+		else
+			out <<< "    $INSTANCE_TEXT already exists locally."
+		fi
+	done
+
+	success <<< "Imported $i new instances from $1."
+)

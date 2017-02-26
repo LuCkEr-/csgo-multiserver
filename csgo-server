@@ -3,6 +3,7 @@
 ####################### LICENSE AND COPYRIGHT INFORMATION ########################
 
 about-this-program () { cat <<EOF
+
 ================================================================================
 
                            CS:GO Multi Server Manager
@@ -28,81 +29,34 @@ CONDITIONS  OF ANY KIND,  either  express or  implied.  See the  License for the
 specific language governing permissions and limitations under the License.
 
 ================================================================================
-
 EOF
 }
 
 
 
 
-################################# DEFINITIONS ##################################
+#################### GET LOCATION OF CSGO-MSM ON THE SYSTEM ####################
 
+# this script's filename and directory
+get-location () {
+	local dirname="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Get script filename and directory
-basename="$(basename "${BASH_SOURCE[0]}")"
-dirname="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ $PATH =~ (^|:)$dirname(:|$) ]]; 
-	then THIS_COMM="$basename"; 
-	else THIS_COMM="${BASH_SOURCE[0]}"; fi
+	THIS_COMMAND="${BASH_SOURCE[0]}"
+	if [[ $PATH =~ (^|:)$dirname(:|$) ]]; then
+		THIS_COMMAND="$(basename "$THIS_COMMAND")"
+	fi
 
-THIS_SCRIPT="$(readlink -f "$dirname/$basename" 2> /dev/null)"
-THIS_DIR="$(dirname "$THIS_SCRIPT")"
-unset basename dirname
-
-USER_DIR="$HOME/msm.d"
-
-
-# override dot builtin: execute a handler (either a .sh-file or .sh-files in a directory)
-# Further parameters are passed to the executed scripts
-. () {
-	local cmd=${1%%.sh} # Strip .sh extension
-	shift               # Makes ${@:2} unnecessary
-	# Try executing file or file.sh (depending on extension) otherwise execute sh-files in directory
-	if [[ $cmd =~ \.[^/]*$ ]]
-		then .file "$cmd" $@ && return
-		else .file "$cmd.sh" $@ && return; fi
-	.dir "$cmd" $@
+	THIS_SCRIPT="$(readlink -e "${BASH_SOURCE[0]}")"
+	THIS_DIR="$(dirname "$THIS_SCRIPT")"
 }
 
-
-# Execute all .sh-files inside a given directory
-# Further parameters are passed to the executed scripts
-#
-# Fails and exits if any file is faulty or no files exist in the directory
-.dir () {
-	[[ -d $1 ]] && {								\
-		for file in "$1"/*.sh; do					\
-			.file "$file" ${@:2} || return 1; done; \
-		}
-}
-
-
-# Execute a file and set the context for the colon function
-# Further parameters are passed to the executed scripts
-.file () {
-	local currentSrcDir="$(dirname $1)"
-	[[ -f $1 ]] && builtin . "$1" ${@:2}
-}
-
-
-# override colon builtin: execute a file relative to the current file's base directory
-# Further parameters are passed to the executed scripts
-: () { . $currentSrcDir/$1 ${@:2}; }
+get-location
 
 
 
 
-################################### PROGRAM ####################################
+############################# ACTUALLY GET STARTED #############################
 
+. "$THIS_DIR/common.sh" # Load common functions, variables and configuration
 
-# This sets the default parameters such as $APP, if not given through the environment
-. "$USER_DIR/defaults.conf" || . "$THIS_DIR/defaults.conf"
-
-# Run the thing
-. "$THIS_DIR/program" $@
-
-
-
-errno=$?
-unset -f . .. :
-if [[ $0 != ${BASH_SOURCE[0]} ]]; then return $errno; else exit $errno; fi
+: "program/main" && main "$@"

@@ -8,22 +8,35 @@
 
 
 
+Core.CommandLine::registerCommands () {
+	simpleCommand "Core.CommandLine::usage" help --help usage
+	simpleCommand "about-this-program" info about license
+}
+
+
+
+
+################################## USAGE INFO ##################################
+
 # usage: display all the possible commands and a short explanation of what they do
 # 
-# Addons should at some time be able to inject their usage information into this function
-Core.CommandLine::usage () { cat <<EOF
-Usage: $(bold "$THIS_COMM") < commands >
+# TODO: Allow addons to inject their usage information into this function
+Core.CommandLine::usage () { bold <<EOF
 
-$(printf "\x1b[1;36m%s\x1b[m"              "GENERAL COMMANDS:")
+Usage: **$THIS_COMMAND** < commands >
+
+$(printf "\x1b[36m%s\x1b[m"   "**GENERAL COMMANDS:**")
     usage    > Display this help message
     info     > About this script / copyright and license information
 
-$(printf "\x1b[1;36m%s\x1b[m"              "INSTANCE SELECTION:")
+$(printf "\x1b[36m%s\x1b[m"   "**INSTANCE SELECTION:**")
     @...     > Select the server instance to apply the following commands on.
              > If no name is given, work on the base installation instead.
-    The default instance \$DEFAULT_INSTANCE can be specified in the config file
 
-$(printf "\x1b[1;36m%s\x1b[m"              "INSTANCE-SPECIFIC COMMANDS:")
+    By default, the base installation is used. You may specify a different
+    default \$INSTANCE in your config file.
+
+$(printf "\x1b[36m%s\x1b[m"   "**INSTANCE-SPECIFIC COMMANDS:**")
     create   > Create a new server instance
     start | stop | restart
              > Start/Stop/Restart given server instance (using tmux)
@@ -31,115 +44,158 @@ $(printf "\x1b[1;36m%s\x1b[m"              "INSTANCE-SPECIFIC COMMANDS:")
     console  > Attach (connect) to the server's console. While inside, press
              > CTRL-D to detach (return to outside) without killing the server
 
-$(printf "\x1b[1;36m%s\x1b[22m %s\x1b[m"   "ADMINISTRATION COMMANDS:" "(regarding the base installation)")
-    admin-install
-             > Configure this user as his own admin, install SteamCMD,
-             > and optionally download the game
+$(printf "\x1b[36m%s\x1b[m"   "**ADMINISTRATION COMMANDS:** working on the base installation")
+    setup    > Configure this program and install dependencies
     update   > Install/Update the game server
     validate > Repair broken/missing game files
 
 Commands will be executed in the order they are given. If a command fails,
 subsequent commands will not be executed.
-
 EOF
 }
 
 
 
 
-##################################################################################
-########################### LOOP THROUGH ALL PARAMETERS ##########################
-##################################################################################
+############################# COMMAND LIST HELPERS #############################
+
+Core.CommandLine::loadModuleCommands () {
+	unset       SIMPLE_COMMANDS  ONEARG_COMMANDS  GREEDY_COMMANDS
+	declare -gA SIMPLE_COMMANDS  ONEARG_COMMANDS  GREEDY_COMMANDS
+
+	local m
+	for m in $Modules; do
+		try $m::registerCommands
+	done
+}
+
+
+# Add a simple command (takes no arguments)
+# Assign function $1 to commands $...
+simpleCommand () {
+	local c
+	for c in ${@:2}; do
+		SIMPLE_COMMANDS[$c]="$1"
+	done
+}
+
+
+# Adds a command that takes exactly one argument
+oneArgCommand () {
+	local c
+	for c in ${@:2}; do
+		ONEARG_COMMANDS[$c]="$1"
+	done
+}
+
+
+# Adds a greedy command that takes all remaining arguments, until
+# the next instance is selected (use @@ to stay on the same instance)
+greedyCommand () {
+	local c
+	for c in ${@:2}; do
+		GREEDY_COMMANDS[$c]="$1"
+	done
+}
+
+
+
+
+######################### ACTUAL COMMAND LINE PARSING ##########################
 
 Core.CommandLine::parseArguments () {
-
+	unset INSTANCE
+	local ARGS=( )
 	while [[ $1 ]]; do
-		unset NEED_SETUP
-		unset NO_COMMAND
-
-		case "$1" in ############ BEGIN OUTER CASE ############
-
-			( info | about | license | copyright )
-				about-this-program
-				;;
-
-			( help | --help | usage )
-				Core.CommandLine::usage
-				;;
-
-			( admin-install )
-				admin-install || exit 0
-				;;
-
-			( * )
-				# Read configuration changes and start setup if needed
-				readcfg || { echo; setup; } || exit 1
-
-				# Check other cases, but respect preconditions
-
-
-				case "$1" in ############ BEGIN INNER CASE ############
-
-					( @* )
-						set-instance ${1:1}
-						;;
-
-					( start | launch )
-						start || exit 1
-						;;
-
-					( stop | exit )
-						stop || exit 1
-						;;
-
-					( restart )
-						stop &&	start || exit 1
-						;;
-
-					( status )
-						status
-						errno=$?
-						if (( $errno == 0 )); then
-							echo "$SERVER_TEXT is RUNNING!"
-						elif (( $errno == 1 )); then
-							echo "$SERVER_TEXT is currently LAUNCHING or UPDATING!"
-						elif (( $errno == 2 )); then
-							echo "$SERVER_TEXT is STOPPED!"
-						else 
-							exit 1; fi
-
-						echo
-						;;
-
-					( console )
-						console
-						;;
-
-					( update | up | install )
-						update || exit 1
-						;;
-
-					( create | create-instance )
-						create-instance || exit 1
-						;;
-
-					( validate | repair )
-						update validate || exit 1
-						;;
-
-					( * )
-						caterr <<< "$(bold ERROR:) Unrecognized Option: $(bold "$1")."
-						echo       "       Try '$THIS_COMM usage' for a list of available commands."
-						echo
-						exit 1
-						;;
-
-					esac ############ END INNER CASE ############
-				;;
-
-			esac ############ END OUTER CASE ############
-		
+		if [[ $1 =~ ^@ ]]; then
+			Core.CommandLine::exec "${ARGS[@]}"
+			[[ ! ${1:1} =~ @ ]] && INSTANCE="${1:1}"
+			ARGS=( )
+		else
+			ARGS+=( "$1" )
+		fi
 		shift
-	done ############ END LOOP ############
+	done
+	Core.CommandLine::exec "${ARGS[@]}"
+}
 
+
+# TODO: Allow addons to define their own arguments and corresponding actions
+Core.CommandLine::exec () (
+
+	[[ $@ ]] || return
+
+	INSTANCE=${INSTANCE-"$DEFAULT_INSTANCE"}
+	Core.Instance::select
+
+	out <<-EOF >&3
+
+
+
+		==~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~==
+
+		    Executing the following commands on **$INSTANCE_TEXT**:
+		        $(quote "$@")
+	EOF
+
+	Core.CommandLine::execRemotely "$@" && return
+
+	Core.CommandLine::loadModuleCommands
+
+	while [[ $1 ]]; do ################ BEGIN LOOP ################
+
+		out <<-EOF >&3
+
+
+			>>>>> Currently parsing argument: **$1**
+		EOF
+
+		if   [[ ${SIMPLE_COMMANDS[$1]} ]]; then
+			debug <<< "Executing ${SIMPLE_COMMANDS[$1]}"
+			${SIMPLE_COMMANDS[$1]}
+
+		elif [[ ${ONEARG_COMMANDS[$1]} ]]; then
+			local fun=${ONEARG_COMMANDS[$1]}
+			shift
+			debug <<< "Executing $fun $1"
+			$fun "$1"
+
+		elif [[ ${GREEDY_COMMANDS[$1]} ]]; then
+			local fun=${GREEDY_COMMANDS[$1]}
+			local args=( )
+			while shift; do
+				[[ $1 ]] && args+=( "$1" )
+			done
+			debug <<< "Executing $fun $(quote "${args[@]}")"
+			$fun "${args[@]}"
+
+		else
+			log <<< ""
+			error <<< "Unknown command: **$1**"
+		fi
+
+		shift
+	done ################ END LOOP ################
+)
+
+
+# Try executing the commands on a remote machine
+# fails (exit code 1) if it is a local instance
+#
+# TODO: test this!
+Core.CommandLine::execRemotely () {
+	[[ $INSTANCE && -e "$INSTANCE_DIR/msm.d/host" ]] || return 1
+
+	local HOST="$(cat "$INSTANCE_DIR/msm.d/host")"
+
+	debug <<-EOF
+		Switching to machine **$HOST**, which is the
+		host of **remote instance @$INSTANCE** ...
+	EOF
+
+	ssh -t "$HOST" \
+		MSM_REMOTE=1 $(ssh-pass-vars MSM_DEBUG APP $(App::varsToPass)) \
+		"$THIS_COMMAND" @$INSTANCE "$@"
+
+	return 0
 }
