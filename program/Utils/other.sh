@@ -19,6 +19,28 @@
 
 
 
+
+# Search if an element is in an array
+# Syntax: array-contains "${arr[*]}" elem
+array-contains () {
+	[[ " $1 " =~ " $2 " ]]
+}
+
+# Remove Elements in $2 from $1, Result is echoed
+array-diff () {
+	local elem
+	local arr=" $1 "
+	for elem in $2; do
+		arr=${arr// $elem / }; done
+	echo $arr
+}
+
+# Reverses the array of parameters given to this function.
+# May break with large arrays due to the recursive nature
+array-reverse () {
+	[[ $1 ]] &&	echo $(array-reverse ${@:2}) $1
+}
+
 # kills and deletes the tmux-session at location $SOCKET
 delete-tmux () {
 	tmux -S "$SOCKET" kill-server > /dev/null 2>&1

@@ -35,7 +35,7 @@ EOF
 
 
 
-################################### PROGRAM ###################################
+################################# DEFINITIONS ##################################
 
 
 # Get script filename and directory
@@ -52,35 +52,54 @@ unset basename dirname
 USER_DIR="$HOME/msm.d"
 
 
-# override dot builtin: execute a file relative to the csgo-mulitserver base
-# or the user's own msm settings directory
+# override dot builtin: execute a handler (either a .sh-file or .sh-files in a directory)
+# Further parameters are passed to the executed scripts
 . () {
-	if [[ -r "$USER_DIR/$cmd" ]] && ! [[ $1 =~ ^program/ ]]; then
-		.. "$USER_DIR/$@"
-	elif [[ -r "$THIS_DIR/$cmd" ]]; then
-		.. "$THIS_DIR/$@"
-	else return 1; fi
+	local cmd=${1%%.sh} # Strip .sh extension
+	shift               # Makes ${@:2} unnecessary
+	# Try executing file or file.sh (depending on extension) otherwise execute sh-files in directory
+	if [[ $cmd =~ \.[^/]*$ ]]
+		then .file "$cmd" $@ && return
+		else .file "$cmd.sh" $@ && return; fi
+	.dir "$cmd" $@
 }
 
-.. () {
-	if [[ -d $1 ]]; then
-		for file in "$1"/*.sh; do .. "$file"; done
-	else
-		local currentSrcDir="$(dirname $1)"
-		builtin . "$1" ${@:2}; fi
+
+# Execute all .sh-files inside a given directory
+# Further parameters are passed to the executed scripts
+#
+# Fails and exits if any file is faulty or no files exist in the directory
+.dir () {
+	[[ -d $1 ]] && {								\
+		for file in "$1"/*.sh; do					\
+			.file "$file" ${@:2} || return 1; done; \
+		}
 }
+
+
+# Execute a file and set the context for the colon function
+# Further parameters are passed to the executed scripts
+.file () {
+	local currentSrcDir="$(dirname $1)"
+	[[ -f $1 ]] && builtin . "$1" ${@:2}
+}
+
 
 # override colon builtin: execute a file relative to the current file's base directory
-: () {
-	local oldSrcDir="$currentSrcDir"
-	local currentSrcDir="$oldSrcDir/$(dirname "$1")"
-	builtin . "$oldSrcDir/$1"
-}
+# Further parameters are passed to the executed scripts
+: () { . $currentSrcDir/$1 ${@:2}; }
 
 
 
-. defaults.conf
-. program/main.sh $@
+
+################################### PROGRAM ####################################
+
+
+# This sets the default parameters such as $APP, if not given through the environment
+. "$USER_DIR/defaults.conf" || . "$THIS_DIR/defaults.conf"
+
+# Run the thing
+. "$THIS_DIR/program" $@
 
 
 
