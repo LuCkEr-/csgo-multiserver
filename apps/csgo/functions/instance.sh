@@ -32,7 +32,6 @@ EOF
 
 # files/directories which are not shared between the base installation and the instances
 App::instanceIgnoredFiles () { cat <<-EOF; }
-	csgo/addons
 EOF
 
 
