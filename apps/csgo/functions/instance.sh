@@ -11,12 +11,9 @@
 App::isRunnableInstance () [[ -x $INSTANCE_DIR/$SERVER_EXEC ]]
 
 
-# files/directories to copy fully 
+# files/directories to copy fully
 App::instanceCopiedFiles () { cat <<-EOF; }
-	csgo/addons
 	csgo/cfg
-	csgo/models
-	csgo/sound
 EOF
 
 
@@ -33,6 +30,9 @@ EOF
 # files/directories which are not shared between the base installation and the instances
 App::instanceIgnoredFiles () { cat <<-EOF; }
 	csgo/addons
+	csgo/models
+	csgo/cfg
+	csgo/sound
 EOF
 
 
@@ -51,7 +51,7 @@ App::finalizeInstance () (
 App::applyInstancePermissions () {
 	# Remove read privileges for files that may contain sensitive data
 	# (such as passwords, IP addresses, etc)
-	
+
 	chmod -R o-r "$INSTANCE_DIR/msm.d/cfg"
 	chmod o-r "$INSTANCE_DIR/csgo/cfg/autoexec.cfg"
 	chmod o-r "$INSTANCE_DIR/csgo/cfg/server.cfg"
