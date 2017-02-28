@@ -13,7 +13,10 @@ App::isRunnableInstance () [[ -x $INSTANCE_DIR/$SERVER_EXEC ]]
 
 # files/directories to copy fully
 App::instanceCopiedFiles () { cat <<-EOF; }
+	csgo/addons
 	csgo/cfg
+	csgo/models
+	csgo/sound
 EOF
 
 
@@ -30,9 +33,6 @@ EOF
 # files/directories which are not shared between the base installation and the instances
 App::instanceIgnoredFiles () { cat <<-EOF; }
 	csgo/addons
-	csgo/models
-	csgo/cfg
-	csgo/sound
 EOF
 
 
